@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log" // Added log import
 	"os"
 	"os/signal"
 	"syscall"
@@ -90,18 +91,25 @@ func runWatch(cmd *cobra.Command, args []string) {
 	go func() {
 		defer close(rawLogChanForParser)
 		defer close(rawLogChanForTUI)
+		log.Println("Fan-out: Starting goroutine")
 		for line := range rawLogChan {
+			log.Println("Fan-out: Received line from rawLogChan:", line)
 			select {
 			case rawLogChanForParser <- line:
+				log.Println("Fan-out: Sent line to parser chan")
 			case <-ctx.Done():
+				log.Println("Fan-out: Context cancelled during send to parser")
 				return
 			}
 			select {
 			case rawLogChanForTUI <- line:
+				log.Println("Fan-out: Sent line to TUI chan")
 			case <-ctx.Done():
+				log.Println("Fan-out: Context cancelled during send to TUI")
 				return
 			}
 		}
+		log.Println("Fan-out: rawLogChan closed, fan-out goroutine exiting")
 	}()
 
 	multiParser := parser.NewMultiParser(
@@ -113,11 +121,15 @@ func runWatch(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry)
 	go func() {
 		defer close(logEntryChan)
+		log.Println("Parser: Starting goroutine")
 		for line := range rawLogChanForParser { // Now reads from rawLogChanForParser
+			log.Println("Parser: Received line from rawLogChanForParser:", line)
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
+				log.Println("Parser: Sent entry to logEntryChan")
 			}
 		}
+		log.Println("Parser: rawLogChanForParser closed, parser goroutine exiting")
 	}()
 
 	engine := analysis.NewEngine()
@@ -163,18 +175,25 @@ func runReplay(cmd *cobra.Command, args []string) {
 	go func() {
 		defer close(rawLogChanForParser)
 		defer close(rawLogChanForTUI)
+		log.Println("Fan-out: Starting goroutine (Replay)")
 		for line := range rawLogChan {
+			log.Println("Fan-out: Received line from rawLogChan (Replay):", line)
 			select {
 			case rawLogChanForParser <- line:
+				log.Println("Fan-out: Sent line to parser chan (Replay)")
 			case <-ctx.Done():
+				log.Println("Fan-out: Context cancelled during send to parser (Replay)")
 				return
 			}
 			select {
 			case rawLogChanForTUI <- line:
+				log.Println("Fan-out: Sent line to TUI chan (Replay)")
 			case <-ctx.Done():
+				log.Println("Fan-out: Context cancelled during send to TUI (Replay)")
 				return
 			}
 		}
+		log.Println("Fan-out: rawLogChan closed, fan-out goroutine exiting (Replay)")
 	}()
 
 	multiParser := parser.NewMultiParser(
@@ -186,11 +205,15 @@ func runReplay(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry)
 	go func() {
 		defer close(logEntryChan)
+		log.Println("Parser: Starting goroutine (Replay)")
 		for line := range rawLogChanForParser { // Now reads from rawLogChanForParser
+			log.Println("Parser: Received line from rawLogChanForParser (Replay):", line)
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
+				log.Println("Parser: Sent entry to logEntryChan (Replay)")
 			}
 		}
+		log.Println("Parser: rawLogChanForParser closed, parser goroutine exiting (Replay)")
 	}()
 
 	engine := analysis.NewEngine()

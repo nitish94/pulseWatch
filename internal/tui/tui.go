@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"log" // Added log import
 	"strings"
 	"time"
 
@@ -28,14 +29,15 @@ type Model struct {
 	logScrollPane       viewport.Model
 	filterInput         textinput.Model
 	currentFilter       string
-	quitAfterFirstReport bool // New field
+	quitAfterFirstReport bool
 }
 
 type metricsMsg struct{ metrics types.Metrics }
 type rawLogMsg struct{ line string }
 
 // NewModel creates a new TUI model.
-func NewModel(metricsCh <-chan types.Metrics, rawLogsCh <-chan string, quitAfterFirstReport bool) Model { // Modified signature
+func NewModel(metricsCh <-chan types.Metrics, rawLogsCh <-chan string, quitAfterFirstReport bool) Model {
+	log.Println("TUI: NewModel created. quitAfterFirstReport:", quitAfterFirstReport)
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -58,12 +60,13 @@ func NewModel(metricsCh <-chan types.Metrics, rawLogsCh <-chan string, quitAfter
 		filteredLogs:         []string{},
 		filterInput:          ti,
 		logScrollPane:        vp,
-		quitAfterFirstReport: quitAfterFirstReport, // Initialize new field
+		quitAfterFirstReport: quitAfterFirstReport,
 	}
 }
 
 // Init initializes the TUI model.
 func (m Model) Init() tea.Cmd {
+	log.Println("TUI: Init called")
 	return tea.Batch(
 		m.spinner.Tick,
 		m.filterInput.SetCursorMode(textinput.CursorBlink),
@@ -74,12 +77,16 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) waitForMetrics() tea.Msg {
-	return metricsMsg{<-m.metricsCh}
+	metric := <-m.metricsCh
+	log.Println("TUI: waitForMetrics received metrics. TotalRequests:", metric.TotalRequests)
+	return metricsMsg{metric}
 }
 
 // New function to receive raw log entries
 func (m Model) waitForRawLogs() tea.Msg {
-	return rawLogMsg{<-m.rawLogsCh}
+	line := <-m.rawLogsCh
+	log.Println("TUI: waitForRawLogs received raw log line:", line)
+	return rawLogMsg{line}
 }
 
 // Update handles updates to the TUI model.
@@ -89,8 +96,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds []tea.Cmd
 	)
 
+	log.Printf("TUI: Update called with msg type %T\n", msg)
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		log.Println("TUI: KeyMsg received:", msg.String())
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -118,6 +128,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		log.Println("TUI: WindowSizeMsg received")
 		m.width = msg.Width
 		m.height = msg.Height
 		// Adjust viewport size
@@ -126,15 +137,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filterInput.Width = m.width - 10
 
 	case metricsMsg:
+		log.Println("TUI: metricsMsg received. TotalRequests before update:", m.metrics.TotalRequests)
 		m.metrics = msg.metrics
+		log.Println("TUI: metricsMsg updated. TotalRequests after update:", m.metrics.TotalRequests)
 		cmds = append(cmds, m.waitForMetrics)
 
 		// If quitAfterFirstReport is true, and we have received the first report, quit
 		if m.quitAfterFirstReport && m.metrics.TotalRequests > 0 {
+			log.Println("TUI: Quitting after first report. TotalRequests:", m.metrics.TotalRequests)
 			return m, tea.Quit
 		}
 
 	case rawLogMsg:
+		log.Println("TUI: rawLogMsg received. Line:", msg.line)
 		// Add new log entry, trimming if buffer is too large
 		m.logs = append(m.logs, msg.line)
 		if len(m.logs) > maxLogEntries {
@@ -144,6 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.waitForRawLogs) // Continue receiving raw logs
 
 	default:
+		log.Println("TUI: Default case for msg type", fmt.Sprintf("%T", msg))
 		// Update spinner and log viewport
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)

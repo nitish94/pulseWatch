@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"container/list"
+	"log" // Added log import
 	"sync"
 	"time"
 
@@ -72,10 +73,12 @@ func (e *Engine) processLogs(logChan <-chan types.LogEntry) {
 		select {
 		case logEntry, ok := <-logChan:
 			if !ok {
+				log.Println("Engine: logChan closed, processLogs exiting")
 				return
 			}
 			e.addLogEntry(logEntry)
 		case <-e.doneChan:
+			log.Println("Engine: Context cancelled, processLogs exiting")
 			return
 		}
 	}
@@ -122,6 +125,7 @@ func (e *Engine) addLogEntry(entry types.LogEntry) {
 	e.statusCodeDistribution[statusCodeCategory]++
 
 	e.dirty = true // Mark as dirty when a new log is added
+	log.Println("Engine: Added log entry, dirty flag set to true. TotalRequests:", e.metrics.TotalRequests)
 
 	// Prune old entries
 	e.prune(now)
@@ -151,6 +155,7 @@ func (e *Engine) runTicker() {
 	ticker := time.NewTicker(e.tickInterval)
 	defer ticker.Stop()
 
+	log.Println("Engine: runTicker starting")
 	for {
 		select {
 		case <-ticker.C:
@@ -160,9 +165,13 @@ func (e *Engine) runTicker() {
 				e.detectAnomalies()
 				e.metricsChan <- e.metrics
 				e.dirty = false // Reset dirty flag after sending
+				log.Println("Engine: Sent metrics to metricsChan. TotalRequests:", e.metrics.TotalRequests)
+			} else {
+				log.Println("Engine: Ticker fired, but no new logs. Not sending metrics.")
 			}
 			e.mu.Unlock() // Unlock after operations
 		case <-e.doneChan:
+			log.Println("Engine: Context cancelled, runTicker exiting")
 			return
 		}
 	}
