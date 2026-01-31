@@ -3,6 +3,7 @@ package ingest
 import (
 	"bufio"
 	"context"
+	"fmt" // Added missing fmt import
 	"io"
 	"os"
 
@@ -27,37 +28,44 @@ func NewFileIngester(filePath string, initialScan bool) *FileIngester {
 
 // Ingest starts tailing the file and returns a channel of log lines.
 func (i *FileIngester) Ingest(ctx context.Context) (<-chan string, error) {
-	lines := make(chan string, 1000) // Buffered channel to prevent deadlock during initial scan
+	lines := make(chan string, 1000)
 
-	// Phase 1: Initial scan if requested
+	// One-shot read (if initialScan is true)
 	if i.InitialScan {
 		file, err := os.Open(i.FilePath)
 		if err != nil {
+			close(lines) // Ensure channel is closed on error
 			return nil, err
 		}
-		defer file.Close() // Close the file when the function exits
+		// Goroutine to read the file and close the channel
+		go func() {
+			defer file.Close()
+			defer close(lines) // Close channel after reading all lines
 
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			select {
-			case lines <- scanner.Text():
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				select {
+				case lines <- scanner.Text():
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			return nil, err
-		}
+			if err := scanner.Err(); err != nil {
+				// Handle scanner error, perhaps log it
+				fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+			}
+		}()
+		return lines, nil // Return here after setting up one-shot read
 	}
 
-	// Phase 2: Tail for new lines
-	// Always start tailing from the current end of the file for new updates.
+	// Dynamic Tailing (if initialScan is false, i.e., default behavior)
 	t, err := tail.TailFile(i.FilePath, tail.Config{
 		Follow: true,
-		ReOpen: true, // Re-open the file if it's rotated
-		Location: &tail.SeekInfo{Offset: 0, Whence: io.SeekEnd}, // Start from the end for new lines
+		ReOpen: true,
+		Location: &tail.SeekInfo{Offset: 0, Whence: io.SeekEnd}, // Always start from end for actual tailing
 	})
 	if err != nil {
+		close(lines) // Ensure channel is closed on error
 		return nil, err
 	}
 

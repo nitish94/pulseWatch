@@ -102,7 +102,8 @@ func runWatch(cmd *cobra.Command, args []string) {
 	engine := analysis.NewEngine()
 	metricsChan := engine.Start(logEntryChan)
 
-	model := tui.NewModel(metricsChan, rawLogChan)
+	initialScan, _ := cmd.Flags().GetBool("initial-scan") // Get the initialScan flag
+	model := tui.NewModel(metricsChan, rawLogChan, initialScan) // Pass initialScan as quitAfterFirstReport
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if err := p.Start(); err != nil {
@@ -153,7 +154,7 @@ func runReplay(cmd *cobra.Command, args []string) {
 	engine := analysis.NewEngine()
 	metricsChan := engine.Start(logEntryChan)
 
-	model := tui.NewModel(metricsChan, rawLogChan)
+	model := tui.NewModel(metricsChan, rawLogChan, false) // Pass false for quitAfterFirstReport
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if err := p.Start(); err != nil {

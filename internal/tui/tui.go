@@ -17,24 +17,25 @@ const maxLogEntries = 1000
 
 // TUI is the terminal user interface for pulsewatch.
 type Model struct {
-	metrics       types.Metrics
-	spinner       spinner.Model
-	width         int
-	height        int
-	metricsCh     <-chan types.Metrics
-	rawLogsCh     <-chan string        // Changed from types.LogEntry
-	logs          []string             // Changed from types.LogEntry
-	filteredLogs  []string             // Changed from types.LogEntry
-	logScrollPane viewport.Model
-	filterInput   textinput.Model
-	currentFilter string
+	metrics             types.Metrics
+	spinner             spinner.Model
+	width               int
+	height              int
+	metricsCh           <-chan types.Metrics
+	rawLogsCh           <-chan string
+	logs                []string
+	filteredLogs        []string
+	logScrollPane       viewport.Model
+	filterInput         textinput.Model
+	currentFilter       string
+	quitAfterFirstReport bool // New field
 }
 
 type metricsMsg struct{ metrics types.Metrics }
-type rawLogMsg struct{ line string } // Changed from types.LogEntry
+type rawLogMsg struct{ line string }
 
 // NewModel creates a new TUI model.
-func NewModel(metricsCh <-chan types.Metrics, rawLogsCh <-chan string) Model { // Changed signature
+func NewModel(metricsCh <-chan types.Metrics, rawLogsCh <-chan string, quitAfterFirstReport bool) Model { // Modified signature
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -50,13 +51,14 @@ func NewModel(metricsCh <-chan types.Metrics, rawLogsCh <-chan string) Model { /
 	vp.MouseWheelEnabled = true
 
 	return Model{
-		spinner:       s,
-		metricsCh:     metricsCh,
-		rawLogsCh:     rawLogsCh,
-		logs:          []string{},
-		filteredLogs:  []string{},
-		filterInput:   ti,
-		logScrollPane: vp,
+		spinner:              s,
+		metricsCh:            metricsCh,
+		rawLogsCh:            rawLogsCh,
+		logs:                 []string{},
+		filteredLogs:         []string{},
+		filterInput:          ti,
+		logScrollPane:        vp,
+		quitAfterFirstReport: quitAfterFirstReport, // Initialize new field
 	}
 }
 
@@ -127,9 +129,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.metrics = msg.metrics
 		cmds = append(cmds, m.waitForMetrics)
 
-	case rawLogMsg: // Changed from rawLogMsg.entry
+		// If quitAfterFirstReport is true, and we have received the first report, quit
+		if m.quitAfterFirstReport && m.metrics.TotalRequests > 0 {
+			return m, tea.Quit
+		}
+
+	case rawLogMsg:
 		// Add new log entry, trimming if buffer is too large
-		m.logs = append(m.logs, msg.line) // Changed from msg.entry
+		m.logs = append(m.logs, msg.line)
 		if len(m.logs) > maxLogEntries {
 			m.logs = m.logs[len(m.logs)-maxLogEntries:]
 		}
