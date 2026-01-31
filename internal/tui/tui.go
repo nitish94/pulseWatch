@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"log" // Added log import
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -147,9 +148,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.quitAfterFirstReport && len(m.metrics.Windows) > 0 {
 			log.Println("TUI: Quitting after first report.")
 			// Print the final view to stdout
-			fmt.Println("Final View:")
 			fmt.Print(m.View())
-			fmt.Println("End Final View")
+			os.Stdout.Sync()
 			return m, tea.Quit
 		}
 

@@ -46,6 +46,7 @@ type Engine struct {
 
 // NewEngine creates a new analysis engine.
 func NewEngine(dbPath string, initialScan bool) (*Engine, error) {
+	fmt.Println("Engine: NewEngine initialScan:", initialScan)
 	stor, err := storage.NewStorage(dbPath)
 	if err != nil {
 		return nil, err
@@ -189,9 +190,9 @@ func (e *Engine) runTicker() {
 				e.detectAnomalies()
 				e.metricsChan <- e.metrics
 				e.dirty = false // Reset dirty flag after sending
-				log.Println("Engine: Sent metrics to metricsChan.")
+				fmt.Println("Engine: Sent metrics to metricsChan.")
 			} else {
-				log.Println("Engine: Ticker fired, but no new logs. Not sending metrics.")
+				fmt.Println("Engine: Ticker fired, but no new logs. Not sending metrics.")
 			}
 
 			// Periodic prune
@@ -223,9 +224,7 @@ func (e *Engine) runTicker() {
 }
 
 func (e *Engine) calculateMetrics() {
-	log.Println("Engine: calculateMetrics called")
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	fmt.Println("Engine: calculateMetrics called")
 
 	e.metrics.Windows = make(map[string]types.WindowedMetrics)
 
