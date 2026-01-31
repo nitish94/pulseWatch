@@ -118,9 +118,21 @@ func (p *JSONParser) Parse(line string) (types.LogEntry, bool) {
 	return entry, true
 }
 
+// ApacheParser parses Apache access log lines.
+type ApacheParser struct {
+	regex *regexp.Regexp
+}
+
 // NginxParser parses Nginx access log lines.
 type NginxParser struct {
 	regex *regexp.Regexp
+}
+
+// NewApacheParser creates a new ApacheParser.
+func NewApacheParser() *ApacheParser {
+	// A common Apache log format regex
+	re := regexp.MustCompile(`(?P<remote_addr>\S+) - (?P<remote_user>\S+) \[(?P<time_local>.+)\] "(?P<request>\S+ \S+ \S+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+) "(?P<http_referer>[^"]*)" "(?P<http_user_agent>[^"]*)"`)
+	return &ApacheParser{regex: re}
 }
 
 // NewNginxParser creates a new NginxParser.
@@ -130,10 +142,63 @@ func NewNginxParser() *NginxParser {
 	return &NginxParser{regex: re}
 }
 
+// Parse attempts to parse a line as an Apache access log.
+func (p *ApacheParser) Parse(line string) (types.LogEntry, bool) {
+	match := p.regex.FindStringSubmatch(line)
+	if match == nil {
+		return types.LogEntry{}, false
+	}
+
+	result := make(map[string]string)
+	for i, name := range p.regex.SubexpNames() {
+		if i != 0 && name != "" {
+			result[name] = match[i]
+		}
+	}
+
+	ts, err := time.Parse("02/Jan/2006:15:04:05 -0700", result["time_local"])
+	if err != nil {
+		ts = time.Now()
+	}
+
+	status, _ := strconv.Atoi(result["status"])
+
+	requestParts := strings.Split(result["request"], " ")
+	var endpoint string
+	if len(requestParts) > 1 {
+		endpoint = requestParts[1]
+	}
+
+	ua := user_agent.New(result["http_user_agent"])
+	browserName, browserVersion := ua.Browser()
+
+	entry := types.LogEntry{
+		Timestamp:  ts,
+		Message:    line,
+		StatusCode: status,
+		Endpoint:   endpoint,
+		Fields: map[string]interface{}{
+			"remote_addr":      result["remote_addr"],
+			"request":          result["request"],
+			"http_referer":     result["http_referer"],
+			"user_agent":       result["http_user_agent"],
+			"browser_name":     browserName,
+			"browser_version":  browserVersion,
+			"is_mobile":        ua.Mobile(),
+		},
+	}
+
+	if status >= 400 {
+		entry.Level = types.ErrorLevel
+	} else {
+		entry.Level = types.InfoLevel
+	}
+
+	return entry, true
+}
+
 // Parse attempts to parse a line as an Nginx access log.
 func (p *NginxParser) Parse(line string) (types.LogEntry, bool) {
-	// Temporarily disable NginxParser
-	return types.LogEntry{}, false
 	match := p.regex.FindStringSubmatch(line)
 	if match == nil {
 		return types.LogEntry{}, false

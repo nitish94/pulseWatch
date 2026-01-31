@@ -133,8 +133,8 @@ func runWatch(cmd *cobra.Command, args []string) {
 	}
 
 	// Fan-out rawLogChan to separate channels for parser and TUI
-	rawLogChanForParser := make(chan string)
-	rawLogChanForTUI := make(chan string)
+	rawLogChanForParser := make(chan string, 1000)
+	rawLogChanForTUI := make(chan string, 1000)
 
 	go func() {
 		defer close(rawLogChanForParser)
@@ -159,14 +159,16 @@ func runWatch(cmd *cobra.Command, args []string) {
 		&parser.LineParser{},
 	)
 
-	logEntryChan := make(chan types.LogEntry)
+	logEntryChan := make(chan types.LogEntry, 1000)
 	go func() {
 		defer close(logEntryChan)
+		parsedCount := 0
 		for line := range rawLogChanForParser {
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
 			}
 		}
+		fmt.Printf("Parsed %d lines\n", parsedCount)
 	}()
 
 	initialScan, _ := cmd.Flags().GetBool("initial-scan")
@@ -216,8 +218,8 @@ func runReplay(cmd *cobra.Command, args []string) {
 	}
 
 	// Fan-out rawLogChan to separate channels for parser and TUI
-	rawLogChanForParser := make(chan string)
-	rawLogChanForTUI := make(chan string)
+	rawLogChanForParser := make(chan string, 1000)
+	rawLogChanForTUI := make(chan string, 1000)
 
 	go func() {
 		defer close(rawLogChanForParser)
@@ -242,14 +244,16 @@ func runReplay(cmd *cobra.Command, args []string) {
 		&parser.LineParser{},
 	)
 
-	logEntryChan := make(chan types.LogEntry)
+	logEntryChan := make(chan types.LogEntry, 1000)
 	go func() {
 		defer close(logEntryChan)
+		parsedCount := 0
 		for line := range rawLogChanForParser {
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
 			}
 		}
+		fmt.Printf("Parsed %d lines\n", parsedCount)
 	}()
 
 	initialScan, _ := cmd.Flags().GetBool("initial-scan")

@@ -288,88 +288,61 @@ func (m Model) View() string {
 			s.WriteString("\n\n")
 		}
 	} else {
-		// Create grid for live view
-		var leftColumn strings.Builder
-		var rightColumn strings.Builder
-
-		// Left: Metrics windows
+		// Live view with boxes
+		var boxes []string
 		for _, window := range []string{"1m", "5m", "1h"} {
 			wm, ok := m.metrics.Windows[window]
 			if !ok {
 				continue
 			}
 
-			windowTitle := fmt.Sprintf("Last %s", window)
-			boxStyle := lipgloss.NewStyle().
+			box := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#7D56F4")).
 				Padding(1).
-				Width(40)
-
-			content := fmt.Sprintf(
-				"%s\n\nRPS: %.2f\nErrors: %.2f%%\nRequests: %d\n\nP50: %s\nP90: %s\nP95: %s\nP99: %s",
-				windowTitle,
-				wm.RPS,
-				wm.ErrorRate,
-				wm.TotalRequests,
-				wm.P50Latency.Truncate(time.Millisecond),
-				wm.P90Latency.Truncate(time.Millisecond),
-				wm.P95Latency.Truncate(time.Millisecond),
-				wm.P99Latency.Truncate(time.Millisecond),
-			)
-			leftColumn.WriteString(boxStyle.Render(content))
-			leftColumn.WriteString("\n\n")
+				Width(35).
+				Render(fmt.Sprintf(
+					"%s\n\nRPS: %.2f\nErrors: %.2f%%\nRequests: %d\n\nP50: %s\nP95: %s",
+					window,
+					wm.RPS,
+					wm.ErrorRate,
+					wm.TotalRequests,
+					wm.P50Latency.Truncate(time.Millisecond),
+					wm.P95Latency.Truncate(time.Millisecond),
+				))
+			boxes = append(boxes, box)
 		}
+		metricsRow := lipgloss.JoinHorizontal(lipgloss.Top, boxes...)
+		s.WriteString(metricsRow)
+		s.WriteString("\n\n")
 
-		// Right: Trends and Anomalies
-		trendBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#FF6B6B")).
-			Padding(1).
-			Width(50)
-
-		var trends strings.Builder
-		trends.WriteString("Trends (Recent):\n\n")
-
+		// Trends
 		if len(m.metrics.TrendHistory) > 0 {
-			start := len(m.metrics.TrendHistory) - 5
-			if start < 0 {
-				start = 0
-			}
-			for i := start; i < len(m.metrics.TrendHistory); i++ {
-				tp := m.metrics.TrendHistory[i]
-				trends.WriteString(fmt.Sprintf("RPS: %.1f | Err: %.2f%% | Lat: %v\n",
-					tp.RPS, tp.ErrorRate, tp.P95Latency.Truncate(time.Millisecond)))
-			}
-		} else {
-			trends.WriteString("Collecting data...\n")
+			trendBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#00FF00")).
+				Padding(1).
+				Width(80).
+				Render("Trends: RPS, Errors, Latency over time")
+			s.WriteString(trendBox)
+			s.WriteString("\n\n")
 		}
-
-		rightColumn.WriteString(trendBox.Render(trends.String()))
-		rightColumn.WriteString("\n\n")
 
 		// Anomalies
 		if len(m.metrics.Anomalies) > 0 {
+			var anomalies strings.Builder
+			anomalies.WriteString("Anomalies:\n")
+			for _, anomaly := range m.metrics.Anomalies {
+				anomalies.WriteString(fmt.Sprintf("• %s: %s\n", anomaly.Type, anomaly.Message))
+			}
 			anomalyBox := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#FF0000")).
 				Padding(1).
-				Width(50)
-
-			var anomalies strings.Builder
-			anomalies.WriteString("Anomalies:\n\n")
-			for _, anomaly := range m.metrics.Anomalies {
-				anomalies.WriteString(fmt.Sprintf("[%s] %s: %s\n",
-					anomaly.Timestamp.Format("15:04:05"), anomaly.Type, anomaly.Message))
-			}
-			rightColumn.WriteString(anomalyBox.Render(anomalies.String()))
-			rightColumn.WriteString("\n\n")
+				Render(anomalies.String())
+			s.WriteString(anomalyBox)
+			s.WriteString("\n\n")
 		}
-
-		// Join columns
-		grid := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn.String(), rightColumn.String())
-		s.WriteString(grid)
-		s.WriteString("\n\n")
 	}
 
 	// Anomalies

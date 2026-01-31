@@ -64,7 +64,7 @@ func NewEngine(dbPath string, initialScan bool, customMetrics []types.CustomMetr
 		"1h":  1 * time.Hour,
 	}
 
-	return &Engine{
+	e := &Engine{
 		windowDuration: defaultWindow,
 		tickInterval:   defaultTickInterval,
 		windows:        windows,
@@ -86,7 +86,13 @@ func NewEngine(dbPath string, initialScan bool, customMetrics []types.CustomMetr
 		rpsHistory:             make([]float64, 0, maxMetricsHistory),
 		errorRateHistory:       make([]float64, 0, maxMetricsHistory),
 		latencyHistory:         make([]float64, 0, maxMetricsHistory),
-	}, nil
+	}
+
+	if initialScan {
+		e.windowDuration = 10 * 365 * 24 * time.Hour // Keep all for initial scan
+	}
+
+	return e, nil
 }
 
 // Start begins the analysis engine's processing loop.
@@ -171,7 +177,6 @@ func (e *Engine) addLogEntry(entry types.LogEntry) {
 
 	now := time.Now()
 	e.logEntries.PushBack(entry)
-	fmt.Printf("After PushBack, len: %d\n", e.logEntries.Len())
 
 	// Insert to DB
 	if err := e.storage.InsertLogEntry(entry); err != nil {
