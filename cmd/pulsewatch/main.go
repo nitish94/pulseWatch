@@ -31,7 +31,7 @@ func printReport(metrics types.Metrics) {
 		fmt.Println()
 
 		if len(wm.TopEndpoints) > 0 {
-			fmt.Println("Top Endpoints:")
+			fmt.Println("Endpoints (sorted by requests):")
 			type endpointCount struct {
 				endpoint string
 				count    int
@@ -41,10 +41,7 @@ func printReport(metrics types.Metrics) {
 				ec = append(ec, endpointCount{ep, cnt})
 			}
 			sort.Slice(ec, func(i, j int) bool { return ec[i].count > ec[j].count })
-			for i, e := range ec {
-				if i >= 5 {
-					break
-				}
+			for _, e := range ec {
 				fmt.Printf("%s: %d\n", e.endpoint, e.count)
 			}
 			fmt.Println()
@@ -60,6 +57,14 @@ func printReport(metrics types.Metrics) {
 			fmt.Println("Custom Metrics:")
 			for name, value := range wm.Custom {
 				fmt.Printf("%s: %d\n", name, value)
+			}
+			fmt.Println()
+		}
+
+		if len(metrics.Anomalies) > 0 {
+			fmt.Println("Detected Anomalies:")
+			for _, anomaly := range metrics.Anomalies {
+				fmt.Printf("- %s: %s\n", anomaly.Type, anomaly.Message)
 			}
 			fmt.Println()
 		}
@@ -162,13 +167,11 @@ func runWatch(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry, 1000)
 	go func() {
 		defer close(logEntryChan)
-		parsedCount := 0
 		for line := range rawLogChanForParser {
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
 			}
 		}
-		fmt.Printf("Parsed %d lines\n", parsedCount)
 	}()
 
 	initialScan, _ := cmd.Flags().GetBool("initial-scan")
@@ -179,18 +182,16 @@ func runWatch(cmd *cobra.Command, args []string) {
 	}
 	metricsChan := engine.Start(logEntryChan)
 
-	if initialScan {
-		// For initial scan, wait for metrics and print report
-		metrics := <-metricsChan
-		printReport(metrics)
-	} else {
-		model := tui.NewModel(metricsChan, rawLogChanForTUI, initialScan)
-		p := tea.NewProgram(model, tea.WithAltScreen())
+	model := tui.NewModel(metricsChan, rawLogChanForTUI, initialScan)
+	var opts []tea.ProgramOption
+	if !initialScan {
+		opts = append(opts, tea.WithAltScreen())
+	}
+	p := tea.NewProgram(model, opts...)
 
-		if err := p.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
-			os.Exit(1)
-		}
+	if err := p.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Println("Pulsewatch shutting down.")
@@ -247,13 +248,11 @@ func runReplay(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry, 1000)
 	go func() {
 		defer close(logEntryChan)
-		parsedCount := 0
 		for line := range rawLogChanForParser {
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
 			}
 		}
-		fmt.Printf("Parsed %d lines\n", parsedCount)
 	}()
 
 	initialScan, _ := cmd.Flags().GetBool("initial-scan")

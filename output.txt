@@ -1,0 +1,14 @@
+Engine: NewEngine initialScan: true
+MultiParser: trying parser *parser.JSONParser
+JSONParser: Parse called
+JSONParser: unmarshal failed
+MultiParser: trying parser *parser.NginxParser
+NginxParser: Parse called
+MultiParser: trying parser *parser.LineParser
+LineParser: Parse called
+MultiParser: parser *parser.LineParser returned true
+Engine: processLogs started
+Engine: Received log entry
+Engine: addLogEntry called
+Engine: InsertLogEntry start
+Engine: runTicker default, initialScan: true dirty: false

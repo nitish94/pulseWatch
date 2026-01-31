@@ -1,0 +1,5 @@
+{"timestamp": "2023-10-10T13:55:36Z", "level": "INFO", "message": "GET /api/status", "status": 200, "latency": 5}
+{"timestamp": "2023-10-10T13:55:37Z", "level": "INFO", "message": "POST /api/login", "status": 200, "latency": 10}
+{"timestamp": "2023-10-10T13:55:38Z", "level": "INFO", "message": "GET /index.html", "status": 200, "latency": 20}
+{"timestamp": "2023-10-10T13:55:39Z", "level": "ERROR", "message": "GET /error", "status": 404, "latency": 3}
+{"timestamp": "2023-10-10T13:55:40Z", "level": "ERROR", "message": "PUT /api/data", "status": 500, "latency": 15}

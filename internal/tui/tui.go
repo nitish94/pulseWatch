@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
@@ -77,7 +76,6 @@ func NewModel(metricsCh <-chan types.Metrics, rawLogsCh <-chan string, quitAfter
 
 // Init initializes the TUI model.
 func (m Model) Init() tea.Cmd {
-	log.Println("TUI: Init called")
 	return tea.Batch(
 		m.spinner.Tick,
 		m.filterInput.SetCursorMode(textinput.CursorBlink),
@@ -105,11 +103,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds []tea.Cmd
 	)
 
-	log.Printf("TUI: Update called with msg type %T\n", msg)
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		log.Println("TUI: KeyMsg received:", msg.String())
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -137,7 +132,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
-		log.Println("TUI: WindowSizeMsg received")
 		m.width = msg.Width
 		m.height = msg.Height
 		// Adjust viewport size
@@ -156,7 +150,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case rawLogMsg:
-		log.Println("TUI: rawLogMsg received. Line:", msg.line)
 		// Add new log entry, trimming if buffer is too large
 		m.logs = append(m.logs, msg.line)
 		if len(m.logs) > maxLogEntries {
@@ -166,7 +159,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.waitForRawLogs) // Continue receiving raw logs
 
 	default:
-		log.Println("TUI: Default case for msg type", fmt.Sprintf("%T", msg))
 		// Update spinner and log viewport
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
@@ -204,23 +196,24 @@ func (m Model) View() string {
 	var s strings.Builder
 
 	// Top half: Metrics
-	// Display spinner and "Waiting for logs..." if no metrics yet
+	// Display spinner and message if no metrics yet
 	if len(m.metrics.Windows) == 0 {
-		return fmt.Sprintf("\n %s Waiting for logs...\n\n", m.spinner.View())
+		if m.quitAfterFirstReport {
+			return fmt.Sprintf("\n %s Processing logs...\n\n", m.spinner.View())
+		} else {
+			return fmt.Sprintf("\n %s Waiting for logs...\n\n", m.spinner.View())
+		}
 	}
 
-	// Title - only show for realtime monitoring
-	if !m.quitAfterFirstReport {
-		title := lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
-			PaddingLeft(1).
-			PaddingRight(1).
-			Render("PulseWatch")
-		s.WriteString(title)
-		s.WriteString("\n\n")
-	}
+	// Header
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#7D56F4")).
+		Width(m.width).
+		Align(lipgloss.Center)
+	header := headerStyle.Render("PulseWatch - Log Analysis Tool")
+	s.WriteString(header + "\n")
 
 	// Display metrics
 	if m.quitAfterFirstReport {
@@ -417,6 +410,15 @@ func (m Model) View() string {
 	s.WriteString(m.filterInput.View())
 	s.WriteString("\n")
 	s.WriteString(m.logScrollPane.View())
+
+	// Footer
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#333333")).
+		Width(m.width).
+		Align(lipgloss.Left)
+	footer := footerStyle.Render(" Press 'q' to quit | 'esc' to clear filter | 'enter' to apply filter ")
+	s.WriteString("\n" + footer)
 
 	return s.String()
 }

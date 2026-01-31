@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
-
-	"github.com/hpcloud/tail"
+	"time"
 )
 
 // Ingester is the interface for log ingestion.
@@ -58,26 +56,40 @@ func (i *FileIngester) Ingest(ctx context.Context) (<-chan string, error) {
 	}
 
 	// Dynamic Tailing (if initialScan is false, i.e., default behavior)
-	t, err := tail.TailFile(i.FilePath, tail.Config{
-		Follow: true,
-		ReOpen: true,
-		Location: &tail.SeekInfo{Offset: 0, Whence: io.SeekEnd}, // Always start from end for actual tailing
-	})
+	file, err := os.Open(i.FilePath)
 	if err != nil {
-		close(lines) // Ensure channel is closed on error
+		close(lines)
 		return nil, err
 	}
 
 	go func() {
+		defer file.Close()
 		defer close(lines)
+
+		file.Seek(0, 2)
+		currentSize, _ := file.Seek(0, 1)
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
-			case line := <-t.Lines:
-				if line != nil {
-					lines <- line.Text
+			case <-ticker.C:
+				stat, err := file.Stat()
+				if err != nil {
+					continue
+				}
+				if stat.Size() > currentSize {
+					file.Seek(currentSize, 0)
+					scanner := bufio.NewScanner(file)
+					for scanner.Scan() {
+						select {
+						case lines <- scanner.Text():
+						case <-ctx.Done():
+							return
+						}
+					}
+					currentSize = stat.Size()
 				}
 			case <-ctx.Done():
-				t.Stop()
 				return
 			}
 		}

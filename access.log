@@ -17,3 +17,27 @@
 127.0.0.1 - user [10/Oct/2023:13:55:52 +0000] "GET /error HTTP/1.1" 500 25 "-" "curl/7.64.1" 0.004
 127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 200 70 "-" "PostmanRuntime/7.26.8" 0.020
 127.0.0.1 - user [10/Oct/2023:13:55:54 +0000] "GET /api/health HTTP/1.1" 200 10 "-" "curl/7.64.1" 0.003
+test log
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 200 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 400 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 200 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 200 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 200 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 200 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 200 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [10/Oct/2023:13:55:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [01/Feb/2025:04:40:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [01/Feb/2025:04:40:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [01/Feb/2025:04:40:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [01/Feb/2025:04:40:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [01/Feb/2025:04:40:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [31/Jan/2026:23:41:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [31/Jan/2026:23:41:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [31/Jan/2026:23:41:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
+127.0.0.1 - user [31/Jan/2026:23:41:53 +0000] "PUT /api/config HTTP/1.1" 500 70 "-" "PostmanRuntime/7.26.8" 0.020
