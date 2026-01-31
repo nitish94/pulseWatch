@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"log" // Added log import
+	"sort"
 	"strings"
 	"time"
 
@@ -78,7 +79,7 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) waitForMetrics() tea.Msg {
 	metric := <-m.metricsCh
-	log.Println("TUI: waitForMetrics received metrics. TotalRequests:", metric.TotalRequests)
+	log.Println("TUI: waitForMetrics received metrics.")
 	return metricsMsg{metric}
 }
 
@@ -137,14 +138,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filterInput.Width = m.width - 10
 
 	case metricsMsg:
-		log.Println("TUI: metricsMsg received. TotalRequests before update:", m.metrics.TotalRequests)
+		log.Println("TUI: metricsMsg received.")
 		m.metrics = msg.metrics
-		log.Println("TUI: metricsMsg updated. TotalRequests after update:", m.metrics.TotalRequests)
+		log.Println("TUI: metricsMsg updated.")
 		cmds = append(cmds, m.waitForMetrics)
 
 		// If quitAfterFirstReport is true, and we have received the first report, quit
-		if m.quitAfterFirstReport && m.metrics.TotalRequests > 0 {
-			log.Println("TUI: Quitting after first report. TotalRequests:", m.metrics.TotalRequests)
+		if m.quitAfterFirstReport && len(m.metrics.Windows) > 0 {
+			log.Println("TUI: Quitting after first report.")
+			// Print the final view to stdout
+			fmt.Println("Final View:")
+			fmt.Print(m.View())
+			fmt.Println("End Final View")
 			return m, tea.Quit
 		}
 
@@ -198,63 +203,159 @@ func (m Model) View() string {
 
 	// Top half: Metrics
 	// Display spinner and "Waiting for logs..." if no metrics yet
-	if m.metrics.TotalRequests == 0 {
+	if len(m.metrics.Windows) == 0 {
 		return fmt.Sprintf("\n %s Waiting for logs...\n\n", m.spinner.View())
 	}
 
-	// Title
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#FAFAFA")).
-		Background(lipgloss.Color("#7D56F4")).
-		PaddingLeft(1).
-		PaddingRight(1).
-		Render("PulseWatch")
-	s.WriteString(title)
-	s.WriteString("\n\n")
-
-	// Stats
-	statsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
-	stats := fmt.Sprintf(
-		"RPS: %.2f | Errors: %.2f%% | Total Requests: %d",
-		m.metrics.RPS,
-		m.metrics.ErrorRate,
-		m.metrics.TotalRequests,
-	)
-	s.WriteString(statsStyle.Render(stats))
-	s.WriteString("\n\n")
-
-	// Latency
-	latencyStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
-	latency := fmt.Sprintf(
-		"P50: %s | P90: %s | P95: %s | P99: %s",
-		m.metrics.P50Latency.Truncate(time.Millisecond),
-		m.metrics.P90Latency.Truncate(time.Millisecond),
-		m.metrics.P95Latency.Truncate(time.Millisecond),
-		m.metrics.P99Latency.Truncate(time.Millisecond),
-	)
-	s.WriteString(latencyStyle.Render(latency))
-	s.WriteString("\n\n")
-
-	// Top Endpoints
-	endpointsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
-	var endpoints strings.Builder
-	endpoints.WriteString("Top Endpoints:\n")
-	for endpoint, count := range m.metrics.TopEndpoints {
-		endpoints.WriteString(fmt.Sprintf("%s: %d\n", endpoint, count))
+	// Title - only show for realtime monitoring
+	if !m.quitAfterFirstReport {
+		title := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Background(lipgloss.Color("#7D56F4")).
+			PaddingLeft(1).
+			PaddingRight(1).
+			Render("PulseWatch")
+		s.WriteString(title)
+		s.WriteString("\n\n")
 	}
-	s.WriteString(endpointsStyle.Render(endpoints.String()))
-	s.WriteString("\n\n")
 
-	// Status Code Distribution
-	statusCodeStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
-	var statusCodes strings.Builder
-	statusCodes.WriteString("Status Codes:\n")
-	for code, count := range m.metrics.StatusCodeDistribution {
-		statusCodes.WriteString(fmt.Sprintf("%s: %d\n", code, count))
+	// Display metrics
+	if m.quitAfterFirstReport {
+		// Historical report
+		wm, ok := m.metrics.Windows["all"]
+		if ok {
+			s.WriteString(lipgloss.NewStyle().Bold(true).Render("Historical Report"))
+			s.WriteString("\n\n")
+
+			// Stats
+			statsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+			stats := fmt.Sprintf(
+				"Total Requests: %d | Errors: %.2f%%",
+				wm.TotalRequests,
+				wm.ErrorRate,
+			)
+			s.WriteString(statsStyle.Render(stats))
+			s.WriteString("\n\n")
+
+			// Latency
+			latencyStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+			latency := fmt.Sprintf(
+				"P50: %s | P90: %s | P95: %s | P99: %s",
+				wm.P50Latency.Truncate(time.Millisecond),
+				wm.P90Latency.Truncate(time.Millisecond),
+				wm.P95Latency.Truncate(time.Millisecond),
+				wm.P99Latency.Truncate(time.Millisecond),
+			)
+			s.WriteString(latencyStyle.Render(latency))
+			s.WriteString("\n\n")
+
+			// Top Endpoints
+			if len(wm.TopEndpoints) > 0 {
+				endpointsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+				var endpoints strings.Builder
+				endpoints.WriteString("Top Endpoints:\n")
+				// Sort endpoints by count
+				type endpointCount struct {
+					endpoint string
+					count    int
+				}
+				var ec []endpointCount
+				for ep, cnt := range wm.TopEndpoints {
+					ec = append(ec, endpointCount{ep, cnt})
+				}
+				sort.Slice(ec, func(i, j int) bool { return ec[i].count > ec[j].count })
+				for i, e := range ec {
+					if i >= 5 { // Top 5
+						break
+					}
+					endpoints.WriteString(fmt.Sprintf("%s: %d\n", e.endpoint, e.count))
+				}
+				s.WriteString(endpointsStyle.Render(endpoints.String()))
+				s.WriteString("\n\n")
+			}
+
+			// Status Code Distribution
+			statusCodeStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+			var statusCodes strings.Builder
+			statusCodes.WriteString("Status Codes:\n")
+			for code, count := range wm.StatusCodeDistribution {
+				statusCodes.WriteString(fmt.Sprintf("%s: %d\n", code, count))
+			}
+			s.WriteString(statusCodeStyle.Render(statusCodes.String()))
+			s.WriteString("\n\n")
+		}
+	} else {
+		// Display metrics for each window
+		for _, window := range []string{"1m", "5m", "1h"} {
+			wm, ok := m.metrics.Windows[window]
+			if !ok {
+				continue
+			}
+
+			windowTitle := fmt.Sprintf("Last %s Metrics", window)
+			s.WriteString(lipgloss.NewStyle().Bold(true).Render(windowTitle))
+			s.WriteString("\n")
+
+			// Stats
+			statsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+			stats := fmt.Sprintf(
+				"RPS: %.2f | Errors: %.2f%% | Total Requests: %d",
+				wm.RPS,
+				wm.ErrorRate,
+				wm.TotalRequests,
+			)
+			s.WriteString(statsStyle.Render(stats))
+			s.WriteString("\n")
+
+			// Latency
+			latencyStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+			latency := fmt.Sprintf(
+				"P50: %s | P90: %s | P95: %s | P99: %s",
+				wm.P50Latency.Truncate(time.Millisecond),
+				wm.P90Latency.Truncate(time.Millisecond),
+				wm.P95Latency.Truncate(time.Millisecond),
+				wm.P99Latency.Truncate(time.Millisecond),
+			)
+			s.WriteString(latencyStyle.Render(latency))
+			s.WriteString("\n")
+
+			// Top Endpoints
+			if len(wm.TopEndpoints) > 0 {
+				endpointsStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+				var endpoints strings.Builder
+				endpoints.WriteString("Top Endpoints:\n")
+				// Sort endpoints by count
+				type endpointCount struct {
+					endpoint string
+					count    int
+				}
+				var ec []endpointCount
+				for ep, cnt := range wm.TopEndpoints {
+					ec = append(ec, endpointCount{ep, cnt})
+				}
+				sort.Slice(ec, func(i, j int) bool { return ec[i].count > ec[j].count })
+				for i, e := range ec {
+					if i >= 5 { // Top 5
+						break
+					}
+					endpoints.WriteString(fmt.Sprintf("%s: %d\n", e.endpoint, e.count))
+				}
+				s.WriteString(endpointsStyle.Render(endpoints.String()))
+				s.WriteString("\n")
+			}
+
+			// Status Code Distribution
+			statusCodeStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+			var statusCodes strings.Builder
+			statusCodes.WriteString("Status Codes:\n")
+			for code, count := range wm.StatusCodeDistribution {
+				statusCodes.WriteString(fmt.Sprintf("%s: %d\n", code, count))
+			}
+			s.WriteString(statusCodeStyle.Render(statusCodes.String()))
+			s.WriteString("\n\n")
+		}
 	}
-	s.WriteString(statusCodeStyle.Render(statusCodes.String()))
-	s.WriteString("\n\n")
 
 	// Anomalies
 	anomaliesStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1).Foreground(lipgloss.Color("9"))

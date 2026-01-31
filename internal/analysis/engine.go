@@ -2,12 +2,14 @@ package analysis
 
 import (
 	"container/list"
+	"fmt"
 	"log" // Added log import
 	"sync"
 	"time"
 
 	"github.com/VividCortex/ewma"
 	"github.com/montanaflynn/stats"
+	"github.com/nitis/pulseWatch/internal/storage"
 	"github.com/nitis/pulseWatch/internal/types"
 )
 
@@ -16,12 +18,16 @@ const (
 	defaultTickInterval   = 1 * time.Second
 	latencyPercentile     = 95
 	errorRateSpikeThreshold = 3.0 // 3x increase
+	pruneInterval         = 1 * time.Hour // Prune DB every hour
+	maxDBAge              = 7 * 24 * time.Hour // Keep 7 days in DB
 )
 
 // Engine is the analysis engine for pulsewatch.
 type Engine struct {
 	windowDuration time.Duration
 	tickInterval   time.Duration
+	windows        map[string]time.Duration
+	initialScan    bool
 
 	logEntries *list.List
 	latencies  []float64
@@ -34,30 +40,48 @@ type Engine struct {
 	metricsChan            chan types.Metrics
 	doneChan               chan struct{}
 	statusCodeDistribution map[string]int
+	storage                *storage.Storage
+	lastPrune              time.Time
 }
 
 // NewEngine creates a new analysis engine.
-func NewEngine() *Engine {
+func NewEngine(dbPath string, initialScan bool) (*Engine, error) {
+	stor, err := storage.NewStorage(dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	windows := map[string]time.Duration{
+		"1m":  1 * time.Minute,
+		"5m":  5 * time.Minute,
+		"1h":  1 * time.Hour,
+	}
+
 	return &Engine{
 		windowDuration: defaultWindow,
 		tickInterval:   defaultTickInterval,
+		windows:        windows,
+		initialScan:    initialScan,
 		logEntries:     list.New(),
 		rpsEWMA:        ewma.NewMovingAverage(),
 		metricsChan:    make(chan types.Metrics),
 		doneChan:       make(chan struct{}),
 		metrics: types.Metrics{
-			TopEndpoints:           make(map[string]int),
-			Anomalies:              []types.Anomaly{},
-			StartTime:              time.Now(),
-			StatusCodeDistribution: make(map[string]int),
+			Windows:   make(map[string]types.WindowedMetrics),
+			Anomalies: []types.Anomaly{},
+			StartTime: time.Now(),
 		},
 		statusCodeDistribution: make(map[string]int),
-		dirty:                  false, // Initialize dirty flag
-	}
+		storage:                stor,
+		dirty:                  false,
+		lastPrune:              time.Now(),
+	}, nil
 }
 
 // Start begins the analysis engine's processing loop.
 func (e *Engine) Start(logChan <-chan types.LogEntry) <-chan types.Metrics {
+	// Load existing entries from DB
+	e.loadExistingEntries()
 	go e.processLogs(logChan)
 	go e.runTicker()
 	return e.metricsChan
@@ -65,10 +89,24 @@ func (e *Engine) Start(logChan <-chan types.LogEntry) <-chan types.Metrics {
 
 // Stop halts the analysis engine.
 func (e *Engine) Stop() {
+	e.storage.Close()
 	close(e.doneChan)
 }
 
+func (e *Engine) loadExistingEntries() {
+	entries, err := e.storage.GetLogEntriesSince(time.Now().Add(-maxDBAge))
+	if err != nil {
+		log.Printf("Error loading existing entries: %v", err)
+		return
+	}
+	for _, entry := range entries {
+		e.addLogEntry(entry)
+	}
+	log.Printf("Loaded %d existing log entries from DB", len(entries))
+}
+
 func (e *Engine) processLogs(logChan <-chan types.LogEntry) {
+	log.Println("Engine: processLogs started")
 	for {
 		select {
 		case logEntry, ok := <-logChan:
@@ -76,6 +114,7 @@ func (e *Engine) processLogs(logChan <-chan types.LogEntry) {
 				log.Println("Engine: logChan closed, processLogs exiting")
 				return
 			}
+			log.Println("Engine: Received log entry")
 			e.addLogEntry(logEntry)
 		case <-e.doneChan:
 			log.Println("Engine: Context cancelled, processLogs exiting")
@@ -85,47 +124,25 @@ func (e *Engine) processLogs(logChan <-chan types.LogEntry) {
 }
 
 func (e *Engine) addLogEntry(entry types.LogEntry) {
+	fmt.Println("Engine: addLogEntry called")
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	now := time.Now()
 	e.logEntries.PushBack(entry)
 
+	// Insert to DB
+	if err := e.storage.InsertLogEntry(entry); err != nil {
+		log.Printf("Error inserting log entry to DB: %v", err)
+	}
+
 	// Add to latencies, but only for successful requests
 	if entry.StatusCode < 400 && entry.Latency > 0 {
 		e.latencies = append(e.latencies, float64(entry.Latency.Milliseconds()))
 	}
 
-	if entry.Endpoint != "" {
-		e.metrics.TopEndpoints[entry.Endpoint]++
-	}
-
-	e.metrics.TotalRequests++
-	if entry.StatusCode >= 400 {
-		e.metrics.TotalErrors++
-	}
-
-	// Update status code distribution
-	statusCodeCategory := func(code int) string {
-		switch {
-		case code >= 100 && code < 200:
-			return "1xx"
-		case code >= 200 && code < 300:
-			return "2xx"
-		case code >= 300 && code < 400:
-			return "3xx"
-		case code >= 400 && code < 500:
-			return "4xx"
-		case code >= 500 && code < 600:
-			return "5xx"
-		default:
-			return "Other"
-		}
-	}(entry.StatusCode)
-	e.statusCodeDistribution[statusCodeCategory]++
-
 	e.dirty = true // Mark as dirty when a new log is added
-	log.Println("Engine: Added log entry, dirty flag set to true. TotalRequests:", e.metrics.TotalRequests)
+	fmt.Println("Engine: dirty set to true")
 
 	// Prune old entries
 	e.prune(now)
@@ -151,6 +168,13 @@ func (e *Engine) prune(now time.Time) {
 	}
 }
 
+func (e *Engine) pruneDB(now time.Time) {
+	olderThan := now.Add(-maxDBAge)
+	if err := e.storage.PruneOldEntries(olderThan); err != nil {
+		log.Printf("Error pruning DB: %v", err)
+	}
+}
+
 func (e *Engine) runTicker() {
 	ticker := time.NewTicker(e.tickInterval)
 	defer ticker.Stop()
@@ -165,58 +189,164 @@ func (e *Engine) runTicker() {
 				e.detectAnomalies()
 				e.metricsChan <- e.metrics
 				e.dirty = false // Reset dirty flag after sending
-				log.Println("Engine: Sent metrics to metricsChan. TotalRequests:", e.metrics.TotalRequests)
+				log.Println("Engine: Sent metrics to metricsChan.")
 			} else {
 				log.Println("Engine: Ticker fired, but no new logs. Not sending metrics.")
+			}
+
+			// Periodic prune
+			if time.Since(e.lastPrune) > pruneInterval {
+				now := time.Now()
+				e.pruneDB(now)
+				e.lastPrune = now
 			}
 			e.mu.Unlock() // Unlock after operations
 		case <-e.doneChan:
 			log.Println("Engine: Context cancelled, runTicker exiting")
 			return
+		default:
+			// For initial scan, send metrics immediately if dirty
+			fmt.Println("Engine: runTicker default, initialScan:", e.initialScan, "dirty:", e.dirty)
+			if e.initialScan {
+				e.mu.Lock()
+				if e.dirty {
+					e.calculateMetrics()
+					e.detectAnomalies()
+					e.metricsChan <- e.metrics
+					e.dirty = false
+					fmt.Println("Engine: Sent initial metrics to metricsChan.")
+				}
+				e.mu.Unlock()
+			}
 		}
 	}
 }
 
 func (e *Engine) calculateMetrics() {
+	log.Println("Engine: calculateMetrics called")
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	duration := time.Since(e.metrics.StartTime).Seconds()
-	if duration == 0 {
-		return
+	e.metrics.Windows = make(map[string]types.WindowedMetrics)
+
+	if e.initialScan {
+		// For initial scan, compute metrics for all entries
+		fmt.Println("Engine: Getting all entries for initial scan")
+		entries, err := e.storage.GetLogEntriesSince(time.Time{}) // All entries
+		if err != nil {
+			log.Printf("Error getting all entries: %v", err)
+		} else {
+			fmt.Printf("Engine: Got %d entries\n", len(entries))
+			wm := e.computeWindowedMetrics(entries, 0) // 0 for no RPS calc
+			e.metrics.Windows["all"] = wm
+			fmt.Println("Engine: Computed metrics for all")
+		}
+	} else {
+		for key, window := range e.windows {
+			entries, err := e.storage.GetEntriesInWindow(window)
+			if err != nil {
+				log.Printf("Error getting entries for window %s: %v", key, err)
+				continue
+			}
+
+			wm := e.computeWindowedMetrics(entries, window)
+			e.metrics.Windows[key] = wm
+		}
 	}
 
-	e.metrics.RPS = float64(e.metrics.TotalRequests) / duration
+	// For backward compatibility, keep Anomalies and StartTime
+}
 
-	if e.metrics.TotalRequests > 0 {
-		e.metrics.ErrorRate = (float64(e.metrics.TotalErrors) / float64(e.metrics.TotalRequests)) * 100
+func (e *Engine) computeWindowedMetrics(entries []types.LogEntry, window time.Duration) types.WindowedMetrics {
+	if len(entries) == 0 {
+		return types.WindowedMetrics{
+			TopEndpoints:           make(map[string]int),
+			StatusCodeDistribution: make(map[string]int),
+		}
 	}
 
-	if len(e.latencies) > 0 {
-		p50, _ := stats.Percentile(e.latencies, 50)
-		p90, _ := stats.Percentile(e.latencies, 90)
-		p95, _ := stats.Percentile(e.latencies, 95)
-		p99, _ := stats.Percentile(e.latencies, 99)
-		e.metrics.P50Latency = time.Duration(p50) * time.Millisecond
-		e.metrics.P90Latency = time.Duration(p90) * time.Millisecond
-		e.metrics.P95Latency = time.Duration(p95) * time.Millisecond
-		e.metrics.P99Latency = time.Duration(p99) * time.Millisecond
+	var latencies []float64
+	topEndpoints := make(map[string]int)
+	statusCodeDist := make(map[string]int)
+	totalRequests := len(entries)
+	totalErrors := 0
+
+	for _, entry := range entries {
+		if entry.StatusCode >= 400 {
+			totalErrors++
+		}
+		if entry.Endpoint != "" {
+			topEndpoints[entry.Endpoint]++
+		}
+		if entry.StatusCode < 400 && entry.Latency > 0 {
+			latencies = append(latencies, float64(entry.Latency.Milliseconds()))
+		}
+
+		statusCodeCategory := func(code int) string {
+			switch {
+			case code >= 100 && code < 200:
+				return "1xx"
+			case code >= 200 && code < 300:
+				return "2xx"
+			case code >= 300 && code < 400:
+				return "3xx"
+			case code >= 400 && code < 500:
+				return "4xx"
+			case code >= 500 && code < 600:
+				return "5xx"
+			default:
+				return "Other"
+			}
+		}(entry.StatusCode)
+		statusCodeDist[statusCodeCategory]++
 	}
 
-	// Update the metrics with the current status code distribution
-	e.metrics.StatusCodeDistribution = make(map[string]int)
-	for category, count := range e.statusCodeDistribution {
-		e.metrics.StatusCodeDistribution[category] = count
+	rps := 0.0
+	if window > 0 {
+		rps = float64(totalRequests) / window.Seconds()
+	}
+	errorRate := 0.0
+	if totalRequests > 0 {
+		errorRate = (float64(totalErrors) / float64(totalRequests)) * 100
+	}
+
+	var p50, p90, p95, p99 time.Duration
+	if len(latencies) > 0 {
+		p50v, _ := stats.Percentile(latencies, 50)
+		p90v, _ := stats.Percentile(latencies, 90)
+		p95v, _ := stats.Percentile(latencies, 95)
+		p99v, _ := stats.Percentile(latencies, 99)
+		p50 = time.Duration(p50v) * time.Millisecond
+		p90 = time.Duration(p90v) * time.Millisecond
+		p95 = time.Duration(p95v) * time.Millisecond
+		p99 = time.Duration(p99v) * time.Millisecond
+	}
+
+	return types.WindowedMetrics{
+		RPS:                    rps,
+		ErrorRate:              errorRate,
+		P50Latency:             p50,
+		P90Latency:             p90,
+		P95Latency:             p95,
+		P99Latency:             p99,
+		TopEndpoints:           topEndpoints,
+		TotalRequests:          totalRequests,
+		TotalErrors:            totalErrors,
+		StatusCodeDistribution: statusCodeDist,
 	}
 }
 
 func (e *Engine) detectAnomalies() {
 	// Simple anomaly detection for now
-	// In a real system, this would be more sophisticated
+	// Use 1h window for detection
+	wm, ok := e.metrics.Windows["1h"]
+	if !ok {
+		return
+	}
 
 	// Error Rate Spike
 	// This is a placeholder. A real implementation would compare against a baseline.
-	if e.metrics.ErrorRate > 10.0 && len(e.metrics.Anomalies) == 0 { // Add anomaly only once for now
+	if wm.ErrorRate > 10.0 && len(e.metrics.Anomalies) == 0 { // Add anomaly only once for now
 		e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
 			Timestamp: time.Now(),
 			Type:      "High Error Rate",
@@ -225,7 +355,7 @@ func (e *Engine) detectAnomalies() {
 	}
 
 	// Latency Jump
-	if e.metrics.P95Latency > 1*time.Second && len(e.metrics.Anomalies) <= 1 { // Add anomaly only once for now
+	if wm.P95Latency > 1*time.Second && len(e.metrics.Anomalies) <= 1 { // Add anomaly only once for now
 		e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
 			Timestamp: time.Now(),
 			Type:      "High Latency",

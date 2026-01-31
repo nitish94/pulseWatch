@@ -33,18 +33,23 @@ type Anomaly struct {
 	Message   string
 }
 
-// Metrics holds the aggregated data points for the TUI display.
-type Metrics struct {
+// WindowedMetrics holds metrics for a specific time window.
+type WindowedMetrics struct {
 	RPS         float64
 	ErrorRate   float64
 	P50Latency  time.Duration
 	P90Latency  time.Duration
 	P95Latency  time.Duration
 	P99Latency  time.Duration
-	Anomalies   []Anomaly
 	TopEndpoints map[string]int
 	TotalRequests int
 	TotalErrors   int
-	StartTime     time.Time
-	StatusCodeDistribution map[string]int // New field for status code distribution
+	StatusCodeDistribution map[string]int
+}
+
+// Metrics holds the aggregated data points for the TUI display.
+type Metrics struct {
+	Windows   map[string]WindowedMetrics // Key: "1m", "5m", "1h"
+	Anomalies []Anomaly
+	StartTime time.Time
 }

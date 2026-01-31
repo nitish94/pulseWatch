@@ -132,12 +132,16 @@ func runWatch(cmd *cobra.Command, args []string) {
 		log.Println("Parser: rawLogChanForParser closed, parser goroutine exiting")
 	}()
 
-	engine := analysis.NewEngine()
+	initialScan, _ := cmd.Flags().GetBool("initial-scan")
+	engine, err := analysis.NewEngine("pulsewatch.db", initialScan)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
+		os.Exit(1)
+	}
 	metricsChan := engine.Start(logEntryChan)
 
-	initialScan, _ := cmd.Flags().GetBool("initial-scan") // Get the initialScan flag
 	model := tui.NewModel(metricsChan, rawLogChanForTUI, initialScan) // TUI now reads from rawLogChanForTUI
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 
 	if err := p.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
@@ -216,7 +220,12 @@ func runReplay(cmd *cobra.Command, args []string) {
 		log.Println("Parser: rawLogChanForParser closed, parser goroutine exiting (Replay)")
 	}()
 
-	engine := analysis.NewEngine()
+	initialScan, _ := cmd.Flags().GetBool("initial-scan")
+	engine, err := analysis.NewEngine("pulsewatch.db", initialScan)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
+		os.Exit(1)
+	}
 	metricsChan := engine.Start(logEntryChan)
 
 	model := tui.NewModel(metricsChan, rawLogChanForTUI, false) // TUI now reads from rawLogChanForTUI

@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -29,10 +30,13 @@ func NewMultiParser(parsers ...Parser) *MultiParser {
 // Parse runs the log line through the configured parsers.
 func (p *MultiParser) Parse(line string) (types.LogEntry, bool) {
 	for _, parser := range p.parsers {
+		fmt.Printf("MultiParser: trying parser %T\n", parser)
 		if entry, ok := parser.Parse(line); ok {
+			fmt.Printf("MultiParser: parser %T returned true\n", parser)
 			return entry, true
 		}
 	}
+	fmt.Println("MultiParser: no parser returned true")
 	return types.LogEntry{}, false
 }
 
@@ -41,12 +45,15 @@ type JSONParser struct{}
 
 // Parse attempts to parse a line as JSON.
 func (p *JSONParser) Parse(line string) (types.LogEntry, bool) {
+	fmt.Println("JSONParser: Parse called")
 	var entry types.LogEntry
 	var raw map[string]interface{}
 
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		fmt.Println("JSONParser: unmarshal failed")
 		return types.LogEntry{}, false
 	}
+	fmt.Println("JSONParser: unmarshal success")
 
 	entry.Fields = make(map[string]interface{})
 
@@ -126,12 +133,15 @@ type NginxParser struct {
 // NewNginxParser creates a new NginxParser.
 func NewNginxParser() *NginxParser {
 	// A common Nginx log format regex
-	re := regexp.MustCompile(`(?P<remote_addr>\S+) - (?P<remote_user>\S+) \[(?P<time_local>.+)\] "(?P<request>\S+ \S+ \S+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+) "(?P<http_referer>[^"]*)" "(?P<http_user_agent>[^"]*)"`)
+	re := regexp.MustCompile(`(?P<remote_addr>\S+) - (?P<remote_user>\S+) \[(?P<time_local>.+)\] "(?P<request>\S+ \S+ \S+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+) "(?P<http_referer>[^"]*)" "(?P<http_user_agent>[^"]*)" (?P<request_time>\S+)`)
 	return &NginxParser{regex: re}
 }
 
 // Parse attempts to parse a line as an Nginx access log.
 func (p *NginxParser) Parse(line string) (types.LogEntry, bool) {
+	fmt.Println("NginxParser: Parse called")
+	// Temporarily disable NginxParser
+	return types.LogEntry{}, false
 	match := p.regex.FindStringSubmatch(line)
 	if match == nil {
 		return types.LogEntry{}, false
@@ -150,11 +160,16 @@ func (p *NginxParser) Parse(line string) (types.LogEntry, bool) {
 	}
 
 	status, _ := strconv.Atoi(result["status"])
-	
+
 	requestParts := strings.Split(result["request"], " ")
 	var endpoint string
 	if len(requestParts) > 1 {
 		endpoint = requestParts[1]
+	}
+
+	latency := 0.0
+	if rt, err := strconv.ParseFloat(result["request_time"], 64); err == nil {
+		latency = rt
 	}
 
 	ua := user_agent.New(result["http_user_agent"])
@@ -165,6 +180,7 @@ func (p *NginxParser) Parse(line string) (types.LogEntry, bool) {
 		Message:    line,
 		StatusCode: status,
 		Endpoint:   endpoint,
+		Latency:    time.Duration(latency * float64(time.Second)),
 		Fields: map[string]interface{}{
 			"remote_addr":      result["remote_addr"],
 			"request":          result["request"],
@@ -192,6 +208,7 @@ type LineParser struct{}
 
 // Parse treats the entire line as a message.
 func (p *LineParser) Parse(line string) (types.LogEntry, bool) {
+	fmt.Println("LineParser: Parse called")
 	level := types.InfoLevel
 	if strings.Contains(strings.ToLower(line), "error") {
 		level = types.ErrorLevel
