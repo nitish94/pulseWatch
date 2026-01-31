@@ -223,6 +223,16 @@ func (m Model) View() string {
 	s.WriteString(endpointsStyle.Render(endpoints.String()))
 	s.WriteString("\n\n")
 
+	// Status Code Distribution
+	statusCodeStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1)
+	var statusCodes strings.Builder
+	statusCodes.WriteString("Status Codes:\n")
+	for code, count := range m.metrics.StatusCodeDistribution {
+		statusCodes.WriteString(fmt.Sprintf("%s: %d\n", code, count))
+	}
+	s.WriteString(statusCodeStyle.Render(statusCodes.String()))
+	s.WriteString("\n\n")
+
 	// Anomalies
 	anomaliesStyle := lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).Padding(1).Foreground(lipgloss.Color("9"))
 	if len(m.metrics.Anomalies) > 0 {

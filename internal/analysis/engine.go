@@ -25,12 +25,14 @@ type Engine struct {
 	logEntries *list.List
 	latencies  []float64
 	mu         sync.Mutex
+	dirty      bool // New field to track if new logs have been added
 
 	rpsEWMA ewma.MovingAverage
 
-	metrics      types.Metrics
-	metricsChan  chan types.Metrics
-	doneChan     chan struct{}
+	metrics                types.Metrics
+	metricsChan            chan types.Metrics
+	doneChan               chan struct{}
+	statusCodeDistribution map[string]int
 }
 
 // NewEngine creates a new analysis engine.
@@ -43,10 +45,13 @@ func NewEngine() *Engine {
 		metricsChan:    make(chan types.Metrics),
 		doneChan:       make(chan struct{}),
 		metrics: types.Metrics{
-			TopEndpoints: make(map[string]int),
-			Anomalies:    []types.Anomaly{},
-			StartTime:    time.Now(),
+			TopEndpoints:           make(map[string]int),
+			Anomalies:              []types.Anomaly{},
+			StartTime:              time.Now(),
+			StatusCodeDistribution: make(map[string]int),
 		},
+		statusCodeDistribution: make(map[string]int),
+		dirty:                  false, // Initialize dirty flag
 	}
 }
 
@@ -87,7 +92,7 @@ func (e *Engine) addLogEntry(entry types.LogEntry) {
 	if entry.StatusCode < 400 && entry.Latency > 0 {
 		e.latencies = append(e.latencies, float64(entry.Latency.Milliseconds()))
 	}
-	
+
 	if entry.Endpoint != "" {
 		e.metrics.TopEndpoints[entry.Endpoint]++
 	}
@@ -96,6 +101,27 @@ func (e *Engine) addLogEntry(entry types.LogEntry) {
 	if entry.StatusCode >= 400 {
 		e.metrics.TotalErrors++
 	}
+
+	// Update status code distribution
+	statusCodeCategory := func(code int) string {
+		switch {
+		case code >= 100 && code < 200:
+			return "1xx"
+		case code >= 200 && code < 300:
+			return "2xx"
+		case code >= 300 && code < 400:
+			return "3xx"
+		case code >= 400 && code < 500:
+			return "4xx"
+		case code >= 500 && code < 600:
+			return "5xx"
+		default:
+			return "Other"
+		}
+	}(entry.StatusCode)
+	e.statusCodeDistribution[statusCodeCategory]++
+
+	e.dirty = true // Mark as dirty when a new log is added
 
 	// Prune old entries
 	e.prune(now)
@@ -128,9 +154,14 @@ func (e *Engine) runTicker() {
 	for {
 		select {
 		case <-ticker.C:
-			e.calculateMetrics()
-			e.detectAnomalies()
-			e.metricsChan <- e.metrics
+			e.mu.Lock() // Lock to check and modify dirty flag
+			if e.dirty {
+				e.calculateMetrics()
+				e.detectAnomalies()
+				e.metricsChan <- e.metrics
+				e.dirty = false // Reset dirty flag after sending
+			}
+			e.mu.Unlock() // Unlock after operations
 		case <-e.doneChan:
 			return
 		}
@@ -140,12 +171,12 @@ func (e *Engine) runTicker() {
 func (e *Engine) calculateMetrics() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	
+
 	duration := time.Since(e.metrics.StartTime).Seconds()
 	if duration == 0 {
 		return
 	}
-	
+
 	e.metrics.RPS = float64(e.metrics.TotalRequests) / duration
 
 	if e.metrics.TotalRequests > 0 {
@@ -161,6 +192,12 @@ func (e *Engine) calculateMetrics() {
 		e.metrics.P90Latency = time.Duration(p90) * time.Millisecond
 		e.metrics.P95Latency = time.Duration(p95) * time.Millisecond
 		e.metrics.P99Latency = time.Duration(p99) * time.Millisecond
+	}
+
+	// Update the metrics with the current status code distribution
+	e.metrics.StatusCodeDistribution = make(map[string]int)
+	for category, count := range e.statusCodeDistribution {
+		e.metrics.StatusCodeDistribution[category] = count
 	}
 }
 
@@ -187,3 +224,4 @@ func (e *Engine) detectAnomalies() {
 		})
 	}
 }
+

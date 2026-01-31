@@ -45,5 +45,6 @@ type Metrics struct {
 	TopEndpoints map[string]int
 	TotalRequests int
 	TotalErrors   int
-	StartTime   time.Time
+	StartTime     time.Time
+	StatusCodeDistribution map[string]int // New field for status code distribution
 }
