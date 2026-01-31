@@ -83,6 +83,27 @@ func runWatch(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Fan-out rawLogChan to separate channels for parser and TUI
+	rawLogChanForParser := make(chan string)
+	rawLogChanForTUI := make(chan string)
+
+	go func() {
+		defer close(rawLogChanForParser)
+		defer close(rawLogChanForTUI)
+		for line := range rawLogChan {
+			select {
+			case rawLogChanForParser <- line:
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case rawLogChanForTUI <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	multiParser := parser.NewMultiParser(
 		&parser.JSONParser{},
 		parser.NewNginxParser(),
@@ -92,7 +113,7 @@ func runWatch(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry)
 	go func() {
 		defer close(logEntryChan)
-		for line := range rawLogChan {
+		for line := range rawLogChanForParser { // Now reads from rawLogChanForParser
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
 			}
@@ -103,7 +124,7 @@ func runWatch(cmd *cobra.Command, args []string) {
 	metricsChan := engine.Start(logEntryChan)
 
 	initialScan, _ := cmd.Flags().GetBool("initial-scan") // Get the initialScan flag
-	model := tui.NewModel(metricsChan, rawLogChan, initialScan) // Pass initialScan as quitAfterFirstReport
+	model := tui.NewModel(metricsChan, rawLogChanForTUI, initialScan) // TUI now reads from rawLogChanForTUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if err := p.Start(); err != nil {
@@ -135,6 +156,27 @@ func runReplay(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Fan-out rawLogChan to separate channels for parser and TUI
+	rawLogChanForParser := make(chan string)
+	rawLogChanForTUI := make(chan string)
+
+	go func() {
+		defer close(rawLogChanForParser)
+		defer close(rawLogChanForTUI)
+		for line := range rawLogChan {
+			select {
+			case rawLogChanForParser <- line:
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case rawLogChanForTUI <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	multiParser := parser.NewMultiParser(
 		&parser.JSONParser{},
 		parser.NewNginxParser(),
@@ -144,7 +186,7 @@ func runReplay(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry)
 	go func() {
 		defer close(logEntryChan)
-		for line := range rawLogChan {
+		for line := range rawLogChanForParser { // Now reads from rawLogChanForParser
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
 			}
@@ -154,7 +196,7 @@ func runReplay(cmd *cobra.Command, args []string) {
 	engine := analysis.NewEngine()
 	metricsChan := engine.Start(logEntryChan)
 
-	model := tui.NewModel(metricsChan, rawLogChan, false) // Pass false for quitAfterFirstReport
+	model := tui.NewModel(metricsChan, rawLogChanForTUI, false) // TUI now reads from rawLogChanForTUI
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if err := p.Start(); err != nil {
