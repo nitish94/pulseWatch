@@ -11,6 +11,7 @@ require (
 	github.com/montanaflynn/stats v0.7.1
 	github.com/mssola/user_agent v0.6.0
 	github.com/spf13/cobra v1.10.2
+	modernc.org/sqlite v1.44.3
 )
 
 require (
@@ -42,8 +43,8 @@ require (
 	golang.org/x/text v0.3.8 // indirect
 	gopkg.in/fsnotify.v1 v1.4.7 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.44.3 // indirect
 )

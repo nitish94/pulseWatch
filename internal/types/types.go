@@ -33,6 +33,20 @@ type Anomaly struct {
 	Message   string
 }
 
+// TrendPoint holds key metrics for trend visualization.
+type TrendPoint struct {
+	RPS       float64
+	P95Latency time.Duration
+	ErrorRate float64
+}
+
+// CustomMetric defines a user-defined metric.
+type CustomMetric struct {
+	Name   string
+	Type   string
+	Filter string
+}
+
 // WindowedMetrics holds metrics for a specific time window.
 type WindowedMetrics struct {
 	RPS         float64
@@ -45,11 +59,13 @@ type WindowedMetrics struct {
 	TotalRequests int
 	TotalErrors   int
 	StatusCodeDistribution map[string]int
+	Custom      map[string]int
 }
 
 // Metrics holds the aggregated data points for the TUI display.
 type Metrics struct {
-	Windows   map[string]WindowedMetrics // Key: "1m", "5m", "1h"
-	Anomalies []Anomaly
-	StartTime time.Time
+	Windows      map[string]WindowedMetrics // Key: "1m", "5m", "1h"
+	Anomalies    []Anomaly
+	StartTime    time.Time
+	TrendHistory []TrendPoint // For trend visualization
 }

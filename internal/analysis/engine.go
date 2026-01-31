@@ -3,7 +3,8 @@ package analysis
 import (
 	"container/list"
 	"fmt"
-	"log" // Added log import
+	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ const (
 	errorRateSpikeThreshold = 3.0 // 3x increase
 	pruneInterval         = 1 * time.Hour // Prune DB every hour
 	maxDBAge              = 7 * 24 * time.Hour // Keep 7 days in DB
+	maxMetricsHistory     = 20 // Keep last 20 metrics for trends
 )
 
 // Engine is the analysis engine for pulsewatch.
@@ -28,6 +30,7 @@ type Engine struct {
 	tickInterval   time.Duration
 	windows        map[string]time.Duration
 	initialScan    bool
+	customMetrics  []types.CustomMetric
 
 	logEntries *list.List
 	latencies  []float64
@@ -42,11 +45,14 @@ type Engine struct {
 	statusCodeDistribution map[string]int
 	storage                *storage.Storage
 	lastPrune              time.Time
+	metricsHistory         []types.TrendPoint
+	rpsHistory             []float64
+	errorRateHistory       []float64
+	latencyHistory         []float64
 }
 
 // NewEngine creates a new analysis engine.
-func NewEngine(dbPath string, initialScan bool) (*Engine, error) {
-	fmt.Println("Engine: NewEngine initialScan:", initialScan)
+func NewEngine(dbPath string, initialScan bool, customMetrics []types.CustomMetric) (*Engine, error) {
 	stor, err := storage.NewStorage(dbPath)
 	if err != nil {
 		return nil, err
@@ -76,6 +82,10 @@ func NewEngine(dbPath string, initialScan bool) (*Engine, error) {
 		storage:                stor,
 		dirty:                  false,
 		lastPrune:              time.Now(),
+		metricsHistory:         make([]types.TrendPoint, 0, maxMetricsHistory),
+		rpsHistory:             make([]float64, 0, maxMetricsHistory),
+		errorRateHistory:       make([]float64, 0, maxMetricsHistory),
+		latencyHistory:         make([]float64, 0, maxMetricsHistory),
 	}, nil
 }
 
@@ -95,42 +105,73 @@ func (e *Engine) Stop() {
 }
 
 func (e *Engine) loadExistingEntries() {
-	entries, err := e.storage.GetLogEntriesSince(time.Now().Add(-maxDBAge))
-	if err != nil {
-		log.Printf("Error loading existing entries: %v", err)
-		return
-	}
-	for _, entry := range entries {
-		e.addLogEntry(entry)
-	}
-	log.Printf("Loaded %d existing log entries from DB", len(entries))
+	// entries, err := e.storage.GetLogEntriesSince(time.Now().Add(-maxDBAge))
+	// if err != nil {
+	// 	log.Printf("Error loading existing entries: %v", err)
+	// 	return
+	// }
+	// for _, entry := range entries {
+	// 	e.addLogEntry(entry)
+	// }
+
 }
 
 func (e *Engine) processLogs(logChan <-chan types.LogEntry) {
-	log.Println("Engine: processLogs started")
 	for {
 		select {
 		case logEntry, ok := <-logChan:
 			if !ok {
-				log.Println("Engine: logChan closed, processLogs exiting")
+				if e.initialScan {
+					e.calculateMetrics()
+					e.detectAnomalies()
+					// Append to history
+					wm, ok := e.metrics.Windows["all"]
+					if !ok {
+						wm, ok = e.metrics.Windows["1m"]
+					}
+					if ok {
+						tp := types.TrendPoint{
+							RPS:       wm.RPS,
+							P95Latency: wm.P95Latency,
+							ErrorRate: wm.ErrorRate,
+						}
+						e.metricsHistory = append(e.metricsHistory, tp)
+						if len(e.metricsHistory) > maxMetricsHistory {
+							e.metricsHistory = e.metricsHistory[1:]
+						}
+						e.rpsHistory = append(e.rpsHistory, wm.RPS)
+						if len(e.rpsHistory) > maxMetricsHistory {
+							e.rpsHistory = e.rpsHistory[1:]
+						}
+						e.errorRateHistory = append(e.errorRateHistory, wm.ErrorRate)
+						if len(e.errorRateHistory) > maxMetricsHistory {
+							e.errorRateHistory = e.errorRateHistory[1:]
+						}
+						e.latencyHistory = append(e.latencyHistory, float64(wm.P95Latency.Milliseconds()))
+						if len(e.latencyHistory) > maxMetricsHistory {
+							e.latencyHistory = e.latencyHistory[1:]
+						}
+					}
+					e.metrics.TrendHistory = make([]types.TrendPoint, len(e.metricsHistory))
+					copy(e.metrics.TrendHistory, e.metricsHistory)
+					e.metricsChan <- e.metrics
+				}
 				return
 			}
-			log.Println("Engine: Received log entry")
 			e.addLogEntry(logEntry)
 		case <-e.doneChan:
-			log.Println("Engine: Context cancelled, processLogs exiting")
 			return
 		}
 	}
 }
 
 func (e *Engine) addLogEntry(entry types.LogEntry) {
-	fmt.Println("Engine: addLogEntry called")
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	now := time.Now()
 	e.logEntries.PushBack(entry)
+	fmt.Printf("After PushBack, len: %d\n", e.logEntries.Len())
 
 	// Insert to DB
 	if err := e.storage.InsertLogEntry(entry); err != nil {
@@ -142,8 +183,7 @@ func (e *Engine) addLogEntry(entry types.LogEntry) {
 		e.latencies = append(e.latencies, float64(entry.Latency.Milliseconds()))
 	}
 
-	e.dirty = true // Mark as dirty when a new log is added
-	fmt.Println("Engine: dirty set to true")
+	e.dirty = true
 
 	// Prune old entries
 	e.prune(now)
@@ -180,7 +220,6 @@ func (e *Engine) runTicker() {
 	ticker := time.NewTicker(e.tickInterval)
 	defer ticker.Stop()
 
-	log.Println("Engine: runTicker starting")
 	for {
 		select {
 		case <-ticker.C:
@@ -188,11 +227,34 @@ func (e *Engine) runTicker() {
 			if e.dirty {
 				e.calculateMetrics()
 				e.detectAnomalies()
+				// Append to history
+				if wm, ok := e.metrics.Windows["1m"]; ok {
+					tp := types.TrendPoint{
+						RPS:       wm.RPS,
+						P95Latency: wm.P95Latency,
+						ErrorRate: wm.ErrorRate,
+					}
+					e.metricsHistory = append(e.metricsHistory, tp)
+					if len(e.metricsHistory) > maxMetricsHistory {
+						e.metricsHistory = e.metricsHistory[1:]
+					}
+					e.rpsHistory = append(e.rpsHistory, wm.RPS)
+					if len(e.rpsHistory) > maxMetricsHistory {
+						e.rpsHistory = e.rpsHistory[1:]
+					}
+					e.errorRateHistory = append(e.errorRateHistory, wm.ErrorRate)
+					if len(e.errorRateHistory) > maxMetricsHistory {
+						e.errorRateHistory = e.errorRateHistory[1:]
+					}
+					e.latencyHistory = append(e.latencyHistory, float64(wm.P95Latency.Milliseconds()))
+					if len(e.latencyHistory) > maxMetricsHistory {
+						e.latencyHistory = e.latencyHistory[1:]
+					}
+				}
+				e.metrics.TrendHistory = make([]types.TrendPoint, len(e.metricsHistory))
+				copy(e.metrics.TrendHistory, e.metricsHistory)
 				e.metricsChan <- e.metrics
-				e.dirty = false // Reset dirty flag after sending
-				fmt.Println("Engine: Sent metrics to metricsChan.")
-			} else {
-				fmt.Println("Engine: Ticker fired, but no new logs. Not sending metrics.")
+				e.dirty = false
 			}
 
 			// Periodic prune
@@ -203,19 +265,16 @@ func (e *Engine) runTicker() {
 			}
 			e.mu.Unlock() // Unlock after operations
 		case <-e.doneChan:
-			log.Println("Engine: Context cancelled, runTicker exiting")
 			return
 		default:
-			// For initial scan, send metrics immediately if dirty
-			fmt.Println("Engine: runTicker default, initialScan:", e.initialScan, "dirty:", e.dirty)
-			if e.initialScan {
+			// For live monitoring, send metrics if dirty
+			if !e.initialScan {
 				e.mu.Lock()
 				if e.dirty {
 					e.calculateMetrics()
 					e.detectAnomalies()
 					e.metricsChan <- e.metrics
 					e.dirty = false
-					fmt.Println("Engine: Sent initial metrics to metricsChan.")
 				}
 				e.mu.Unlock()
 			}
@@ -224,22 +283,16 @@ func (e *Engine) runTicker() {
 }
 
 func (e *Engine) calculateMetrics() {
-	fmt.Println("Engine: calculateMetrics called")
-
 	e.metrics.Windows = make(map[string]types.WindowedMetrics)
 
 	if e.initialScan {
 		// For initial scan, compute metrics for all entries
-		fmt.Println("Engine: Getting all entries for initial scan")
-		entries, err := e.storage.GetLogEntriesSince(time.Time{}) // All entries
-		if err != nil {
-			log.Printf("Error getting all entries: %v", err)
-		} else {
-			fmt.Printf("Engine: Got %d entries\n", len(entries))
-			wm := e.computeWindowedMetrics(entries, 0) // 0 for no RPS calc
-			e.metrics.Windows["all"] = wm
-			fmt.Println("Engine: Computed metrics for all")
+		entries := []types.LogEntry{}
+		for elem := e.logEntries.Front(); elem != nil; elem = elem.Next() {
+			entries = append(entries, elem.Value.(types.LogEntry))
 		}
+		wm := e.computeWindowedMetrics(entries, 0)
+		e.metrics.Windows["all"] = wm
 	} else {
 		for key, window := range e.windows {
 			entries, err := e.storage.GetEntriesInWindow(window)
@@ -252,8 +305,6 @@ func (e *Engine) calculateMetrics() {
 			e.metrics.Windows[key] = wm
 		}
 	}
-
-	// For backward compatibility, keep Anomalies and StartTime
 }
 
 func (e *Engine) computeWindowedMetrics(entries []types.LogEntry, window time.Duration) types.WindowedMetrics {
@@ -261,6 +312,7 @@ func (e *Engine) computeWindowedMetrics(entries []types.LogEntry, window time.Du
 		return types.WindowedMetrics{
 			TopEndpoints:           make(map[string]int),
 			StatusCodeDistribution: make(map[string]int),
+			Custom:                 make(map[string]int),
 		}
 	}
 
@@ -336,30 +388,94 @@ func (e *Engine) computeWindowedMetrics(entries []types.LogEntry, window time.Du
 }
 
 func (e *Engine) detectAnomalies() {
-	// Simple anomaly detection for now
-	// Use 1h window for detection
+	// Statistical anomaly detection using rolling averages and standard deviations
 	wm, ok := e.metrics.Windows["1h"]
 	if !ok {
 		return
 	}
 
-	// Error Rate Spike
-	// This is a placeholder. A real implementation would compare against a baseline.
-	if wm.ErrorRate > 10.0 && len(e.metrics.Anomalies) == 0 { // Add anomaly only once for now
-		e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
-			Timestamp: time.Now(),
-			Type:      "High Error Rate",
-			Message:   "Error rate is above 10%",
-		})
+	// Detect RPS anomalies
+	if len(e.rpsHistory) > 10 {
+		avgRPS, stdRPS := calculateMeanStd(e.rpsHistory)
+		currentRPS := wm.RPS
+		if currentRPS > avgRPS+3*stdRPS || currentRPS < avgRPS-3*stdRPS {
+			e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
+				Timestamp: time.Now(),
+				Type:      "RPS Anomaly",
+				Message:   fmt.Sprintf("RPS %.2f is outside 3-sigma range (avg: %.2f, std: %.2f)", currentRPS, avgRPS, stdRPS),
+			})
+		}
 	}
 
-	// Latency Jump
-	if wm.P95Latency > 1*time.Second && len(e.metrics.Anomalies) <= 1 { // Add anomaly only once for now
-		e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
-			Timestamp: time.Now(),
-			Type:      "High Latency",
-			Message:   "P95 latency is over 1 second",
-		})
+	// Detect Error Rate anomalies
+	if len(e.errorRateHistory) > 10 {
+		avgErr, stdErr := calculateMeanStd(e.errorRateHistory)
+		currentErr := wm.ErrorRate
+		if currentErr > avgErr+3*stdErr || currentErr < avgErr-3*stdErr {
+			e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
+				Timestamp: time.Now(),
+				Type:      "Error Rate Anomaly",
+				Message:   fmt.Sprintf("Error rate %.2f%% is outside 3-sigma range (avg: %.2f%%, std: %.2f%%)", currentErr, avgErr, stdErr),
+			})
+		}
 	}
+
+	// Detect Latency anomalies
+	if len(e.latencyHistory) > 10 {
+		avgLat, stdLat := calculateMeanStd(e.latencyHistory)
+		currentLat := float64(wm.P95Latency.Milliseconds())
+		if currentLat > avgLat+3*stdLat || currentLat < avgLat-3*stdLat {
+			e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
+				Timestamp: time.Now(),
+				Type:      "Latency Anomaly",
+				Message:   fmt.Sprintf("P95 latency %v is outside 3-sigma range (avg: %.2fms, std: %.2fms)", wm.P95Latency, avgLat, stdLat),
+			})
+		}
+	}
+
+	// Baseline drift detection (simple: check if average is trending)
+	if len(e.rpsHistory) > 20 {
+		recentAvg := average(e.rpsHistory[len(e.rpsHistory)-10:])
+		olderAvg := average(e.rpsHistory[len(e.rpsHistory)-20 : len(e.rpsHistory)-10])
+		if recentAvg > olderAvg*1.2 || recentAvg < olderAvg*0.8 {
+			e.metrics.Anomalies = append(e.metrics.Anomalies, types.Anomaly{
+				Timestamp: time.Now(),
+				Type:      "Baseline Drift",
+				Message:   fmt.Sprintf("RPS baseline drift detected (recent avg: %.2f, older avg: %.2f)", recentAvg, olderAvg),
+			})
+		}
+	}
+}
+
+func calculateMeanStd(data []float64) (float64, float64) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	sum := 0.0
+	for _, v := range data {
+		sum += v
+	}
+	mean := sum / float64(len(data))
+	sumSq := 0.0
+	for _, v := range data {
+		sumSq += (v - mean) * (v - mean)
+	}
+	std := 0.0
+	if len(data) > 1 {
+		std = sumSq / float64(len(data)-1)
+		std = math.Sqrt(std)
+	}
+	return mean, std
+}
+
+func average(data []float64) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, v := range data {
+		sum += v
+	}
+	return sum / float64(len(data))
 }
 

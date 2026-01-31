@@ -2,7 +2,6 @@ package parser
 
 import (
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,13 +29,10 @@ func NewMultiParser(parsers ...Parser) *MultiParser {
 // Parse runs the log line through the configured parsers.
 func (p *MultiParser) Parse(line string) (types.LogEntry, bool) {
 	for _, parser := range p.parsers {
-		fmt.Printf("MultiParser: trying parser %T\n", parser)
 		if entry, ok := parser.Parse(line); ok {
-			fmt.Printf("MultiParser: parser %T returned true\n", parser)
 			return entry, true
 		}
 	}
-	fmt.Println("MultiParser: no parser returned true")
 	return types.LogEntry{}, false
 }
 
@@ -45,15 +41,12 @@ type JSONParser struct{}
 
 // Parse attempts to parse a line as JSON.
 func (p *JSONParser) Parse(line string) (types.LogEntry, bool) {
-	fmt.Println("JSONParser: Parse called")
 	var entry types.LogEntry
 	var raw map[string]interface{}
 
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
-		fmt.Println("JSONParser: unmarshal failed")
 		return types.LogEntry{}, false
 	}
-	fmt.Println("JSONParser: unmarshal success")
 
 	entry.Fields = make(map[string]interface{})
 
@@ -139,7 +132,6 @@ func NewNginxParser() *NginxParser {
 
 // Parse attempts to parse a line as an Nginx access log.
 func (p *NginxParser) Parse(line string) (types.LogEntry, bool) {
-	fmt.Println("NginxParser: Parse called")
 	// Temporarily disable NginxParser
 	return types.LogEntry{}, false
 	match := p.regex.FindStringSubmatch(line)
@@ -208,7 +200,6 @@ type LineParser struct{}
 
 // Parse treats the entire line as a message.
 func (p *LineParser) Parse(line string) (types.LogEntry, bool) {
-	fmt.Println("LineParser: Parse called")
 	level := types.InfoLevel
 	if strings.Contains(strings.ToLower(line), "error") {
 		level = types.ErrorLevel

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log" // Added log import
 	"os"
 
 	"github.com/hpcloud/tail"
@@ -33,7 +32,6 @@ func (i *FileIngester) Ingest(ctx context.Context) (<-chan string, error) {
 
 	// One-shot read (if initialScan is true)
 	if i.InitialScan {
-		log.Println("Ingester: Starting one-shot read for file:", i.FilePath)
 		file, err := os.Open(i.FilePath)
 		if err != nil {
 			close(lines) // Ensure channel is closed on error
@@ -42,18 +40,13 @@ func (i *FileIngester) Ingest(ctx context.Context) (<-chan string, error) {
 		// Goroutine to read the file and close the channel
 		go func() {
 			defer file.Close()
-			defer func() {
-				log.Println("Ingester: Closing lines channel after one-shot read")
-				close(lines)
-			}()
+			defer close(lines)
 
 			scanner := bufio.NewScanner(file)
 			for scanner.Scan() {
 				select {
 				case lines <- scanner.Text():
-					log.Println("Ingester: Sent line to lines channel")
 				case <-ctx.Done():
-					log.Println("Ingester: Context cancelled during one-shot read")
 					return
 				}
 			}
@@ -65,7 +58,6 @@ func (i *FileIngester) Ingest(ctx context.Context) (<-chan string, error) {
 	}
 
 	// Dynamic Tailing (if initialScan is false, i.e., default behavior)
-	log.Println("Ingester: Starting dynamic tailing for file:", i.FilePath)
 	t, err := tail.TailFile(i.FilePath, tail.Config{
 		Follow: true,
 		ReOpen: true,
@@ -77,19 +69,14 @@ func (i *FileIngester) Ingest(ctx context.Context) (<-chan string, error) {
 	}
 
 	go func() {
-		defer func() {
-			log.Println("Ingester: Closing lines channel after dynamic tailing")
-			close(lines)
-		}()
+		defer close(lines)
 		for {
 			select {
 			case line := <-t.Lines:
 				if line != nil {
 					lines <- line.Text
-					log.Println("Ingester: Sent tail line to lines channel")
 				}
 			case <-ctx.Done():
-				log.Println("Ingester: Context cancelled during dynamic tailing, stopping tail")
 				t.Stop()
 				return
 			}

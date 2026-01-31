@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log" // Added log import
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
+	"time"
 
 	"github.com/nitis/pulseWatch/internal/analysis"
 	"github.com/nitis/pulseWatch/internal/ingest"
@@ -17,6 +18,53 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/charmbracelet/bubbletea"
 )
+
+func printReport(metrics types.Metrics) {
+	if wm, ok := metrics.Windows["all"]; ok {
+		fmt.Println("Historical Report")
+		fmt.Println()
+
+		fmt.Printf("Total Requests: %d | Errors: %.2f%%\n", wm.TotalRequests, wm.ErrorRate)
+		fmt.Println()
+
+		fmt.Printf("P50: %v | P90: %v | P95: %v | P99: %v\n", wm.P50Latency.Truncate(time.Millisecond), wm.P90Latency.Truncate(time.Millisecond), wm.P95Latency.Truncate(time.Millisecond), wm.P99Latency.Truncate(time.Millisecond))
+		fmt.Println()
+
+		if len(wm.TopEndpoints) > 0 {
+			fmt.Println("Top Endpoints:")
+			type endpointCount struct {
+				endpoint string
+				count    int
+			}
+			var ec []endpointCount
+			for ep, cnt := range wm.TopEndpoints {
+				ec = append(ec, endpointCount{ep, cnt})
+			}
+			sort.Slice(ec, func(i, j int) bool { return ec[i].count > ec[j].count })
+			for i, e := range ec {
+				if i >= 5 {
+					break
+				}
+				fmt.Printf("%s: %d\n", e.endpoint, e.count)
+			}
+			fmt.Println()
+		}
+
+		fmt.Println("Status Codes:")
+		for code, count := range wm.StatusCodeDistribution {
+			fmt.Printf("%s: %d\n", code, count)
+		}
+		fmt.Println()
+
+		if len(wm.Custom) > 0 {
+			fmt.Println("Custom Metrics:")
+			for name, value := range wm.Custom {
+				fmt.Printf("%s: %d\n", name, value)
+			}
+			fmt.Println()
+		}
+	}
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "pulsewatch",
@@ -91,25 +139,18 @@ func runWatch(cmd *cobra.Command, args []string) {
 	go func() {
 		defer close(rawLogChanForParser)
 		defer close(rawLogChanForTUI)
-		log.Println("Fan-out: Starting goroutine")
 		for line := range rawLogChan {
-			log.Println("Fan-out: Received line from rawLogChan:", line)
 			select {
 			case rawLogChanForParser <- line:
-				log.Println("Fan-out: Sent line to parser chan")
 			case <-ctx.Done():
-				log.Println("Fan-out: Context cancelled during send to parser")
 				return
 			}
 			select {
 			case rawLogChanForTUI <- line:
-				log.Println("Fan-out: Sent line to TUI chan")
 			case <-ctx.Done():
-				log.Println("Fan-out: Context cancelled during send to TUI")
 				return
 			}
 		}
-		log.Println("Fan-out: rawLogChan closed, fan-out goroutine exiting")
 	}()
 
 	multiParser := parser.NewMultiParser(
@@ -121,31 +162,33 @@ func runWatch(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry)
 	go func() {
 		defer close(logEntryChan)
-		log.Println("Parser: Starting goroutine")
-		for line := range rawLogChanForParser { // Now reads from rawLogChanForParser
-			log.Println("Parser: Received line from rawLogChanForParser:", line)
+		for line := range rawLogChanForParser {
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
-				log.Println("Parser: Sent entry to logEntryChan")
 			}
 		}
-		log.Println("Parser: rawLogChanForParser closed, parser goroutine exiting")
 	}()
 
 	initialScan, _ := cmd.Flags().GetBool("initial-scan")
-	engine, err := analysis.NewEngine("pulsewatch.db", initialScan)
+	engine, err := analysis.NewEngine("pulsewatch.db", initialScan, []types.CustomMetric{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
 		os.Exit(1)
 	}
 	metricsChan := engine.Start(logEntryChan)
 
-	model := tui.NewModel(metricsChan, rawLogChanForTUI, initialScan) // TUI now reads from rawLogChanForTUI
-	p := tea.NewProgram(model)
+	if initialScan {
+		// For initial scan, wait for metrics and print report
+		metrics := <-metricsChan
+		printReport(metrics)
+	} else {
+		model := tui.NewModel(metricsChan, rawLogChanForTUI, initialScan)
+		p := tea.NewProgram(model, tea.WithAltScreen())
 
-	if err := p.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
-		os.Exit(1)
+		if err := p.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting TUI: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	fmt.Println("Pulsewatch shutting down.")
@@ -179,25 +222,18 @@ func runReplay(cmd *cobra.Command, args []string) {
 	go func() {
 		defer close(rawLogChanForParser)
 		defer close(rawLogChanForTUI)
-		log.Println("Fan-out: Starting goroutine (Replay)")
 		for line := range rawLogChan {
-			log.Println("Fan-out: Received line from rawLogChan (Replay):", line)
 			select {
 			case rawLogChanForParser <- line:
-				log.Println("Fan-out: Sent line to parser chan (Replay)")
 			case <-ctx.Done():
-				log.Println("Fan-out: Context cancelled during send to parser (Replay)")
 				return
 			}
 			select {
 			case rawLogChanForTUI <- line:
-				log.Println("Fan-out: Sent line to TUI chan (Replay)")
 			case <-ctx.Done():
-				log.Println("Fan-out: Context cancelled during send to TUI (Replay)")
 				return
 			}
 		}
-		log.Println("Fan-out: rawLogChan closed, fan-out goroutine exiting (Replay)")
 	}()
 
 	multiParser := parser.NewMultiParser(
@@ -209,19 +245,15 @@ func runReplay(cmd *cobra.Command, args []string) {
 	logEntryChan := make(chan types.LogEntry)
 	go func() {
 		defer close(logEntryChan)
-		log.Println("Parser: Starting goroutine (Replay)")
-		for line := range rawLogChanForParser { // Now reads from rawLogChanForParser
-			log.Println("Parser: Received line from rawLogChanForParser (Replay):", line)
+		for line := range rawLogChanForParser {
 			if entry, ok := multiParser.Parse(line); ok {
 				logEntryChan <- entry
-				log.Println("Parser: Sent entry to logEntryChan (Replay)")
 			}
 		}
-		log.Println("Parser: rawLogChanForParser closed, parser goroutine exiting (Replay)")
 	}()
 
 	initialScan, _ := cmd.Flags().GetBool("initial-scan")
-	engine, err := analysis.NewEngine("pulsewatch.db", initialScan)
+	engine, err := analysis.NewEngine("pulsewatch.db", initialScan, []types.CustomMetric{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
 		os.Exit(1)
